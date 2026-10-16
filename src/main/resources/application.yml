@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: vigo-api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1000}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:5s}
+server:
+  port: ${SERVER_PORT:8080}
+management:
+  endpoints:
+    access:
+      default: none
+    web:
+      exposure:
+        include: health,info
+      discovery:
+        enabled: false
+  endpoint:
+    health:
+      access: read-only
+      show-details: never
+    info:
+      access: read-only

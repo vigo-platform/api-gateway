@@ -1,0 +1,10 @@
+spring:
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: synthetic-stub
+              uri: ${STUB_BASE_URL:http://127.0.0.1:9090}
+              predicates:
+                - Path=/__stub/**
