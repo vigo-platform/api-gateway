@@ -22,6 +22,8 @@ Tests use ephemeral local HTTP stubs and require no teammate services or Docker.
 
 ## Configuration
 
+See [route contract readiness](docs/route-contract-readiness.md) for frozen routing decisions and pending service contracts.
+
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
 | `SERVER_PORT` | `8080` | HTTP listening port |
