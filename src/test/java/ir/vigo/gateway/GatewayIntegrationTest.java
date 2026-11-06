@@ -231,6 +231,28 @@ class GatewayIntegrationTest {
                         + ")[0-9a-f]{16}\\][^\\r\\n]*trace-correlation-test"));
     }
 
+    @Test void omitsManagementAndPreflightAccessLogs(CapturedOutput output) throws Exception {
+        HttpResponse<String> health = send(request("/actuator/health")
+                .header("X-Request-Id", "quiet-health"));
+        assertThat(health.statusCode()).isEqualTo(200);
+        assertThat(id(health)).isEqualTo("quiet-health");
+
+        HttpResponse<String> preflight = send(request("/api/v1/users/me")
+                .header("X-Request-Id", "quiet-preflight")
+                .header("Origin", SITE_ORIGIN)
+                .header("Access-Control-Request-Method", "GET")
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody()));
+        assertThat(preflight.statusCode()).isEqualTo(200);
+        assertThat(id(preflight)).isEqualTo("quiet-preflight");
+
+        HttpResponse<String> api = send(request("/api/v1/users/me")
+                .header("X-Request-Id", "logged-cross-origin-api").header("Origin", SITE_ORIGIN));
+        assertThat(api.statusCode()).isEqualTo(202);
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(output.getOut())
+                .contains("request_id=\"logged-cross-origin-api\""));
+        assertThat(output.getOut()).doesNotContain("quiet-health", "quiet-preflight");
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"", "a,b", "unsafe/value", "a b"})
     void replacesInvalidIds(String incoming) throws Exception {

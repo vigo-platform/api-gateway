@@ -42,7 +42,8 @@ to clear `Forwarded` and `X-Forwarded-Prefix` and set the client IP itself.
 
 ## Logs
 
-Gateway uses Auth's SLF4J key/value layout. Each request log includes a request ID,
+Gateway skips request logs for Actuator paths and CORS preflight requests.
+Each request log uses Auth's SLF4J key/value layout and includes a request ID,
 method, path, route ID, HTTP status, duration, client IP and outcome. A failed
 exchange also records the exception type. Query strings, bodies, and credentials
 are excluded from the request log. A valid `X-Request-Id` is preserved, otherwise

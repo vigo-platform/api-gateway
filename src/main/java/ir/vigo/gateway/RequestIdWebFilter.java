@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
+import org.springframework.boot.actuate.endpoint.web.PathMappedEndpoints;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.core.Ordered;
@@ -17,9 +18,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.ErrorResponse;
+import org.springframework.web.cors.reactive.CorsUtils;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
 import static org.springframework.cloud.gateway.support.ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR;
@@ -30,6 +34,16 @@ public class RequestIdWebFilter implements WebFilter {
     static final String HEADER = "X-Request-Id";
     private static final Logger log = LoggerFactory.getLogger(RequestIdWebFilter.class);
     private static final Pattern SAFE_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
+    private final List<PathPattern> managementPaths;
+
+    public RequestIdWebFilter(PathMappedEndpoints endpoints) {
+        String basePath = endpoints.getBasePath();
+        // With a root management base path, only exclude the exposed endpoint paths.
+        List<String> paths = basePath.isEmpty() ? List.copyOf(endpoints.getAllPaths()) : List.of(basePath);
+        managementPaths = paths.stream()
+                .map(path -> PathPatternParser.defaultInstance.parse(path + "/**"))
+                .toList();
+    }
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
@@ -40,8 +54,14 @@ public class RequestIdWebFilter implements WebFilter {
             exchange.getResponse().getHeaders().set(HEADER, requestId);
             return Mono.empty();
         });
-        return chain.filter(exchange.mutate().request(request ->
-                        request.headers(headers -> headers.set(HEADER, requestId))).build())
+        Mono<Void> response = chain.filter(exchange.mutate().request(request ->
+                request.headers(headers -> headers.set(HEADER, requestId))).build());
+        var request = exchange.getRequest();
+        if (CorsUtils.isPreFlightRequest(request)
+                || managementPaths.stream().anyMatch(path -> path.matches(request.getPath().pathWithinApplication()))) {
+            return response;
+        }
+        return response
                 .doOnSuccess(ignored -> logExchange(exchange, requestId, startedAt, null, false))
                 .doOnError(failure -> logExchange(exchange, requestId, startedAt, failure, false))
                 .doOnCancel(() -> logExchange(exchange, requestId, startedAt, null, true));
