@@ -1,4 +1,4 @@
-name: First slice CI
+name: Verify
 on:
   push:
   pull_request:
@@ -15,8 +15,4 @@ jobs:
           java-version: '21'
           cache: maven
       - name: Verify
-        run: |
-          chmod +x mvnw
-          ./mvnw -B -ntp clean verify
-      - name: Build container (no publishing)
-        run: docker build -t vigo-api-gateway:first-slice .
+        run: sh ./mvnw -B -ntp clean verify

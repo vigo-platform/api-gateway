@@ -1,0 +1,150 @@
+name: Docker Build & Push
+
+on:
+  push:
+    tags:
+      - 'build-and-push'
+      - 'build-and-push-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Docker image tag (leave empty to use commit sha)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY_IMAGE: logtaha/vigo-gateway-service
+  REGISTRY_NAME: Docker Hub
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Docker Image Tag
+        id: resolve_tag
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          COMMIT_MSG="$(git log -1 --pretty=%s | tr '\r' ' ' | sed 's/[|<>&]/ /g')"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$(printf '%s' "$INPUT_TAG" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            TRIGGER="Manual Dispatch"
+          else
+            VERSION=""
+            if [[ "$REF_NAME" == build-and-push-* ]]; then
+              VERSION="${REF_NAME#build-and-push-}"
+            fi
+            TRIGGER="Git Tag"
+          fi
+
+          if [ -n "$VERSION" ]; then
+            if [[ ! "$VERSION" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]; then
+              echo 'The release tag is not a valid Docker image tag.' >&2
+              exit 1
+            fi
+            IMAGE_TAG="$VERSION"
+          else
+            IMAGE_TAG="sha-${SHORT_SHA}"
+          fi
+
+          {
+            printf 'image_tag=%s\n' "$IMAGE_TAG"
+            printf 'trigger=%s\n' "$TRIGGER"
+            printf 'short_sha=%s\n' "$SHORT_SHA"
+            printf 'commit_msg=%s\n' "$COMMIT_MSG"
+            printf 'docker_tags<<EOF\n%s:%s\n' "$REGISTRY_IMAGE" "$IMAGE_TAG"
+            if [ -n "$VERSION" ] && [ "$IMAGE_TAG" != "latest" ]; then
+              printf '%s:latest\n' "$REGISTRY_IMAGE"
+            fi
+            printf 'EOF\n'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        id: setup_buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        id: login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        id: build_push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.resolve_tag.outputs.docker_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate Job Summary
+        if: always()
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+          TRIGGER: ${{ steps.resolve_tag.outputs.trigger }}
+          SHORT_SHA: ${{ steps.resolve_tag.outputs.short_sha }}
+          COMMIT_MSG: ${{ steps.resolve_tag.outputs.commit_msg }}
+          REF_NAME: ${{ github.ref_name }}
+          CHECKOUT_STATUS: ${{ steps.checkout.outcome }}
+          TAG_STATUS: ${{ steps.resolve_tag.outcome }}
+          BUILDX_STATUS: ${{ steps.setup_buildx.outcome }}
+          LOGIN_STATUS: ${{ steps.login.outcome }}
+          BUILD_PUSH_STATUS: ${{ steps.build_push.outcome }}
+          DOCKER_TAGS: ${{ steps.resolve_tag.outputs.docker_tags }}
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          DOCKERHUB_URL="https://hub.docker.com/r/${REGISTRY_IMAGE}"
+          COMMIT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          {
+            printf '# Docker Build & Push\n\n'
+            printf '## Execution Status\n\n'
+            printf '| Item | Value |\n| --- | --- |\n'
+            printf '| Status | %s |\n' "$JOB_STATUS"
+            printf '| Trigger | %s |\n' "${TRIGGER:-$GITHUB_EVENT_NAME}"
+            printf '| Branch / Ref | `%s` |\n' "$REF_NAME"
+            printf '| Commit | [`%s`](%s) |\n' "${SHORT_SHA:-$GITHUB_SHA}" "$COMMIT_URL"
+            printf '| Commit message | %s |\n' "${COMMIT_MSG:-N/A}"
+            printf '| Actor | %s |\n' "$GITHUB_ACTOR"
+            printf '| Run | [#%s](%s) |\n' "$GITHUB_RUN_NUMBER" "$RUN_URL"
+            printf '| Checkout / Tags | %s / %s |\n' "$CHECKOUT_STATUS" "$TAG_STATUS"
+            printf '| Buildx / Login | %s / %s |\n' "$BUILDX_STATUS" "$LOGIN_STATUS"
+            printf '\n## Docker Image\n\n'
+            printf '| Item | Value |\n| --- | --- |\n'
+            printf '| Registry | [%s](%s) |\n' "$REGISTRY_NAME" "$DOCKERHUB_URL"
+            printf '| Build and push | %s |\n' "$BUILD_PUSH_STATUS"
+            if [ -n "$DIGEST" ]; then
+              printf '| Digest | `%s` |\n' "$DIGEST"
+            fi
+            if [ -n "$DOCKER_TAGS" ]; then
+              printf '\nImage tags\n\n'
+              while IFS= read -r tag; do
+                printf -- '- [`%s`](%s)\n' "$tag" "$DOCKERHUB_URL"
+              done <<< "$DOCKER_TAGS"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
