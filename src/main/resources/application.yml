@@ -1,6 +1,12 @@
 spring:
   application:
     name: vigo-api-gateway
+  config:
+    import: "optional:file:./.env[.properties]"
+  main:
+    banner-mode: "off"
+  reactor:
+    context-propagation: auto
   cloud:
     gateway:
       server:
@@ -9,14 +15,34 @@ spring:
             connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:1000}
             response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:5s}
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT}
+  forward-headers-strategy: ${GATEWAY_FORWARD_HEADERS_STRATEGY:none}
+gateway:
+  routes:
+    auth-origin: ${AUTH_SCHEME}://${AUTH_HOST}:${AUTH_PORT}
+    auth-prefix: ${AUTH_ROUTE_PREFIX}
+    auth-jwks-path: ${AUTH_JWKS_PATH:/.well-known/jwks.json}
+    user-origin: ${USER_SCHEME}://${USER_HOST}:${USER_PORT}
+    user-prefix: ${USER_ROUTE_PREFIX}
+    coaches-prefix: ${USER_COACHES_ROUTE_PREFIX}
+    admin-coaches-prefix: ${USER_ADMIN_COACHES_ROUTE_PREFIX}
+    storage-origin: ${STORAGE_SCHEME}://${STORAGE_HOST}:${STORAGE_PORT}
+    storage-prefix: ${STORAGE_ROUTE_PREFIX}
+    storage-response-timeout-ms: ${STORAGE_RESPONSE_TIMEOUT_MS:120000}
 management:
+  tracing:
+    sampling:
+      probability: ${GATEWAY_TRACING_SAMPLING_PROBABILITY:1.0}
   endpoints:
     access:
       default: none
     web:
+      base-path: ${GATEWAY_MANAGEMENT_BASE_PATH:/actuator}
+      path-mapping:
+        health: ${GATEWAY_HEALTH_PATH:health}
+        info: ${GATEWAY_INFO_PATH:info}
       exposure:
-        include: health,info
+        include: health,info,prometheus
       discovery:
         enabled: false
   endpoint:
@@ -25,3 +51,11 @@ management:
       show-details: never
     info:
       access: read-only
+    prometheus:
+      access: read-only
+logging:
+  pattern:
+    correlation: "%correlationId"
+  vector:
+    mode: ${LOGGING_VECTOR_MODE:host}
+    destination: ${LOGGING_VECTOR_DESTINATION:localhost:5044}

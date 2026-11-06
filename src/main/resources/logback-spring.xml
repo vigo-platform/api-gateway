@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <property name="CONSOLE_LOG_PATTERN" value="%clr(%d{${LOG_DATEFORMAT_PATTERN:-yyyy-MM-dd'T'HH:mm:ss.SSSXXX}}){faint} %clr(${LOG_LEVEL_PATTERN:-%5p}){} %clr(${PID:-}){magenta} %clr(--- %esb(){APPLICATION_NAME}%esb{APPLICATION_GROUP}[%15.15t] ${LOG_CORRELATION_PATTERN:-}){faint}%clr(%-40.40logger{39}){cyan} %clr(:){faint} %kvp %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
+    <springProperty name="VECTOR_MODE" source="logging.vector.mode" defaultValue="host"/>
+    <springProperty name="VECTOR_DESTINATION" source="logging.vector.destination" defaultValue="localhost:5044"/>
+    <property name="SERVICE_FIELDS" value='{"service_name":"api-gateway"}'/>
+
+    <!-- The request filter logs errors with a request ID and without the raw query string. -->
+    <logger name="org.springframework.boot.webflux.autoconfigure.error.AbstractErrorWebExceptionHandler" level="OFF"/>
+    <logger name="org.springframework.web.HttpLogging" level="OFF"/>
+
+    <condition class="ch.qos.logback.core.boolex.PropertyEqualityCondition">
+        <key>VECTOR_MODE</key>
+        <value>docker</value>
+    </condition>
+    <if>
+        <then>
+            <appender name="DOCKER_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>${SERVICE_FIELDS}</customFields>
+                </encoder>
+            </appender>
+            <root level="INFO">
+                <appender-ref ref="DOCKER_CONSOLE"/>
+            </root>
+        </then>
+        <else>
+            <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+            <root level="INFO">
+                <appender-ref ref="CONSOLE"/>
+            </root>
+        </else>
+    </if>
+
+    <condition class="ch.qos.logback.core.boolex.ExpressionPropertyCondition">
+        <expression>!propertyEquals("VECTOR_MODE", "docker") &amp;&amp; !propertyEquals("VECTOR_DESTINATION", "")</expression>
+    </condition>
+    <if>
+        <then>
+            <appender name="VECTOR_TCP" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+                <destination>${VECTOR_DESTINATION}</destination>
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>${SERVICE_FIELDS}</customFields>
+                </encoder>
+                <ringBufferSize>8192</ringBufferSize>
+                <connectionTimeout>2000</connectionTimeout>
+                <reconnectionDelay>5000</reconnectionDelay>
+            </appender>
+            <root level="INFO">
+                <appender-ref ref="VECTOR_TCP"/>
+            </root>
+        </then>
+    </if>
+</configuration>

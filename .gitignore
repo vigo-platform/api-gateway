@@ -5,9 +5,12 @@ target/
 .classpath
 .project
 .settings/
+
+# Local environment configuration
 .env
 .env.*
 !.env.example
+
 *.log
 .DS_Store
 Thumbs.db

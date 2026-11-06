@@ -1,25 +1,39 @@
 package ir.vigo.gateway;
 
+import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
+import org.springframework.cloud.gateway.route.Route;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
+import static org.springframework.cloud.gateway.support.ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR;
+
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestIdWebFilter implements WebFilter {
     static final String HEADER = "X-Request-Id";
+    private static final Logger log = LoggerFactory.getLogger(RequestIdWebFilter.class);
     private static final Pattern SAFE_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+        long startedAt = System.nanoTime();
         String requestId = selectRequestId(exchange.getRequest().getHeaders().get(HEADER));
         // Set at commit time so downstream headers cannot replace or duplicate the selected ID.
         exchange.getResponse().beforeCommit(() -> {
@@ -27,7 +41,48 @@ public class RequestIdWebFilter implements WebFilter {
             return Mono.empty();
         });
         return chain.filter(exchange.mutate().request(request ->
-                request.headers(headers -> headers.set(HEADER, requestId))).build());
+                        request.headers(headers -> headers.set(HEADER, requestId))).build())
+                .doOnSuccess(ignored -> logExchange(exchange, requestId, startedAt, null, false))
+                .doOnError(failure -> logExchange(exchange, requestId, startedAt, failure, false))
+                .doOnCancel(() -> logExchange(exchange, requestId, startedAt, null, true));
+    }
+
+    private void logExchange(ServerWebExchange exchange, String requestId, long startedAt,
+                             Throwable failure, boolean cancelled) {
+        HttpStatusCode status = exchange.getResponse().getStatusCode();
+        if (failure != null && !exchange.getResponse().isCommitted()) {
+            status = failure instanceof ErrorResponse error ? error.getStatusCode() : HttpStatus.INTERNAL_SERVER_ERROR;
+        } else if (status == null && !cancelled) {
+            status = HttpStatus.OK;
+        }
+
+        Level level = Level.INFO;
+        String result = "SUCCESS";
+        if (cancelled) {
+            result = "CANCELLED";
+        } else if (status.is5xxServerError() || (failure != null && !status.isError())) {
+            level = Level.ERROR;
+            result = "FAILURE";
+        } else if (status.is4xxClientError()) {
+            level = Level.WARN;
+            result = "REJECTED";
+        }
+
+        Route route = exchange.getAttribute(GATEWAY_ROUTE_ATTR);
+        InetSocketAddress address = exchange.getRequest().getRemoteAddress();
+        var entry = log.atLevel(level).addKeyValue("event", "gateway_request")
+                .addKeyValue("result", result)
+                .addKeyValue("request_id", requestId)
+                .addKeyValue("http_method", exchange.getRequest().getMethod().name())
+                .addKeyValue("path", exchange.getRequest().getURI().getRawPath())
+                .addKeyValue("route_id", route == null ? null : route.getId())
+                .addKeyValue("status", status == null ? null : status.value())
+                .addKeyValue("duration_ms", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt))
+                .addKeyValue("ip_address", address == null ? null : address.getHostString());
+        if (failure != null) {
+            entry.addKeyValue("reason", NestedExceptionUtils.getMostSpecificCause(failure).getClass().getSimpleName());
+        }
+        entry.log("Gateway request finished.");
     }
 
     static String selectRequestId(List<String> values) {
