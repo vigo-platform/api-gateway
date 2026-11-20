@@ -8,7 +8,8 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.UUID;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
@@ -29,13 +30,16 @@ class UnavailableDownstreamTest {
         int port;
         try (ServerSocket socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
         registry.add("AUTH_PORT", () -> port);
+        registry.add("NOTIFICATION_PORT", () -> port);
         registry.add("GATEWAY_CONNECT_TIMEOUT_MS", () -> "300");
         registry.add("GATEWAY_RESPONSE_TIMEOUT", () -> "1s");
     }
 
-    @Test void connectionRefusalUsesFramework500AndStillReturnsRequestId() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/auth/unavailable", "/api/v1/notification/notifications"})
+    void connectionRefusalUsesFramework500AndStillReturnsRequestId(String path) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:"
-                + environment.getProperty("local.server.port") + "/api/v1/auth/unavailable"))
+                + environment.getProperty("local.server.port") + path))
                 .timeout(Duration.ofSeconds(5)).build();
         try (HttpClient client = HttpClient.newHttpClient()) {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());

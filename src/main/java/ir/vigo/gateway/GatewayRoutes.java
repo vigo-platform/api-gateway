@@ -44,11 +44,15 @@ class GatewayRoutes {
                         .and().predicate(GatewayRoutes::isUnambiguousPath)
                         .metadata(RESPONSE_TIMEOUT_ATTR, settings.storageResponseTimeoutMs())
                         .uri(settings.storageOrigin()))
+                .route("notification", route -> route.path(settings.notificationPrefix(), settings.notificationPrefix() + "/**")
+                        .and().predicate(GatewayRoutes::isUnambiguousPath)
+                        .uri(settings.notificationOrigin()))
                 .build();
         log.atInfo().addKeyValue("event", "gateway_routes_configured")
                 .addKeyValue("auth_origin", settings.authOrigin().toString())
                 .addKeyValue("user_origin", settings.userOrigin().toString())
                 .addKeyValue("storage_origin", settings.storageOrigin().toString())
+                .addKeyValue("notification_origin", settings.notificationOrigin().toString())
                 .log("Gateway routes configured.");
         return routes;
     }
@@ -79,7 +83,8 @@ class GatewayRoutes {
     @ConfigurationProperties("gateway.routes")
     record Settings(URI authOrigin, String authPrefix, String authJwksPath,
                     URI userOrigin, String userPrefix, String coachesPrefix, String adminCoachesPrefix,
-                    URI storageOrigin, String storagePrefix, int storageResponseTimeoutMs) {
+                    URI storageOrigin, String storagePrefix, int storageResponseTimeoutMs,
+                    URI notificationOrigin, String notificationPrefix) {
         private static final Pattern API_PREFIX = Pattern.compile("/api/v1(?:/[a-z0-9][a-z0-9-]*)+");
         private static final Pattern WELL_KNOWN_JSON_PATH = Pattern.compile("/\\.well-known/[a-z0-9][a-z0-9-]*\\.json");
 
@@ -87,6 +92,7 @@ class GatewayRoutes {
             validateOrigin(authOrigin, "AUTH");
             validateOrigin(userOrigin, "USER");
             validateOrigin(storageOrigin, "STORAGE");
+            validateOrigin(notificationOrigin, "NOTIFICATION");
             if (authJwksPath == null || !WELL_KNOWN_JSON_PATH.matcher(authJwksPath).matches()) {
                 throw new IllegalArgumentException("AUTH_JWKS_PATH must be a literal JSON path under /.well-known/");
             }
@@ -94,7 +100,12 @@ class GatewayRoutes {
                 throw new IllegalArgumentException("STORAGE_RESPONSE_TIMEOUT_MS must be positive");
             }
 
-            List<String> prefixes = List.of(authPrefix, userPrefix, coachesPrefix, adminCoachesPrefix, storagePrefix);
+            if (notificationPrefix == null || !API_PREFIX.matcher(notificationPrefix).matches()) {
+                throw new IllegalArgumentException("NOTIFICATION_ROUTE_PREFIX must be a literal path under /api/v1/");
+            }
+
+            List<String> prefixes = List.of(authPrefix, userPrefix, coachesPrefix, adminCoachesPrefix, storagePrefix,
+                    notificationPrefix);
             for (int index = 0; index < prefixes.size(); index++) {
                 String prefix = prefixes.get(index);
                 if (!API_PREFIX.matcher(prefix).matches()) {

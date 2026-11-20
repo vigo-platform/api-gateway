@@ -24,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,11 +43,14 @@ import static org.awaitility.Awaitility.await;
 @ExtendWith(OutputCaptureExtension.class)
 class GatewayIntegrationTest {
     private static final String SITE_ORIGIN = "https://vigoapp.ir";
+    private static final String NOTIFICATION_READ_PATH =
+            "/api/v1/notification/notifications/00000000-0000-0000-0000-000000000001/read";
     private static final BlockingQueue<Captured> REQUESTS = new LinkedBlockingQueue<>();
     private static final ExecutorService EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
     private static final HttpServer AUTH = startStub("auth");
     private static final HttpServer USER = startStub("user");
     private static final HttpServer STORAGE = startStub("storage");
+    private static final HttpServer NOTIFICATION = startStub("notification");
     private final HttpClient client = HttpClient.newHttpClient();
     @Autowired Environment environment;
 
@@ -55,6 +59,7 @@ class GatewayIntegrationTest {
         registry.add("AUTH_PORT", () -> AUTH.getAddress().getPort());
         registry.add("USER_PORT", () -> USER.getAddress().getPort());
         registry.add("STORAGE_PORT", () -> STORAGE.getAddress().getPort());
+        registry.add("NOTIFICATION_PORT", () -> NOTIFICATION.getAddress().getPort());
         registry.add("GATEWAY_RESPONSE_TIMEOUT", () -> "500ms");
         registry.add("GATEWAY_CONNECT_TIMEOUT_MS", () -> "300");
     }
@@ -101,6 +106,7 @@ class GatewayIntegrationTest {
         AUTH.stop(0);
         USER.stop(0);
         STORAGE.stop(0);
+        NOTIFICATION.stop(0);
         EXECUTOR.shutdownNow();
     }
 
@@ -138,8 +144,10 @@ class GatewayIntegrationTest {
                         List.of("127.0.0.1"), "{\"hello\":\"world\"}");
     }
 
-    @Test void gatewayAnswersBrowserPreflightWithoutCallingDownstream() throws Exception {
-        HttpResponse<String> response = send(request("/api/v1/files/file-id")
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/files/file-id", NOTIFICATION_READ_PATH})
+    void gatewayAnswersBrowserPreflightWithoutCallingDownstream(String path) throws Exception {
+        HttpResponse<String> response = send(request(path)
                 .header("Origin", SITE_ORIGIN)
                 .header("Access-Control-Request-Method", "PATCH")
                 .header("Access-Control-Request-Headers", "authorization,content-type,x-request-id")
@@ -167,11 +175,23 @@ class GatewayIntegrationTest {
         assertThat(REQUESTS.poll(2, TimeUnit.SECONDS).authorization()).isEqualTo("Bearer synthetic-token");
     }
 
-    @Test void otherOriginsCannotPreflightApiRequests() throws Exception {
-        HttpResponse<String> response = send(request("/api/v1/users/me")
+    @ParameterizedTest
+    @CsvSource({"/api/v1/users/me, GET", NOTIFICATION_READ_PATH + ", PATCH"})
+    void otherOriginsCannotPreflightApiRequests(String path, String method) throws Exception {
+        HttpResponse<String> response = send(request(path)
                 .header("Origin", "https://vigoapp.ir.example.org")
-                .header("Access-Control-Request-Method", "GET")
+                .header("Access-Control-Request-Method", method)
                 .method("OPTIONS", HttpRequest.BodyPublishers.noBody()));
+
+        assertThat(response.statusCode()).isEqualTo(403);
+        assertThat(response.headers().allValues("Access-Control-Allow-Origin")).isEmpty();
+        assertThat(REQUESTS).isEmpty();
+    }
+
+    @Test void otherOriginsCannotSendNotificationPatch() throws Exception {
+        HttpResponse<String> response = send(request(NOTIFICATION_READ_PATH)
+                .header("Origin", "https://vigoapp.ir.example.org")
+                .method("PATCH", HttpRequest.BodyPublishers.noBody()));
 
         assertThat(response.statusCode()).isEqualTo(403);
         assertThat(response.headers().allValues("Access-Control-Allow-Origin")).isEmpty();
@@ -204,6 +224,42 @@ class GatewayIntegrationTest {
             assertThat(response.headers().firstValue("X-Upstream")).contains(route.getValue());
             assertThat(REQUESTS.poll(2, TimeUnit.SECONDS).uri()).isEqualTo(route.getKey());
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/notification", "/api/v1/notification/notifications/unread-count",
+            "/api/v1/notification/notifications?page=0&size=20&tag=a%20b&tag=%2F%2B"})
+    void forwardsNotificationGetsWithFullPathAndQuery(String path) throws Exception {
+        HttpResponse<String> response = send(request(path).header("Authorization", "Bearer synthetic-token"));
+
+        assertThat(response.statusCode()).isEqualTo(202);
+        assertThat(response.headers().firstValue("X-Upstream")).contains("notification");
+        assertThat(REQUESTS.poll(2, TimeUnit.SECONDS))
+                .extracting(Captured::method, Captured::uri, Captured::authorization)
+                .containsExactly("GET", path, "Bearer synthetic-token");
+    }
+
+    @Test void forwardsNotificationPatchAndContinuesTrace() throws Exception {
+        String traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+        String parentSpanId = "00f067aa0ba902b7";
+        String requestId = "notification-read-test";
+        HttpResponse<String> response = send(request(NOTIFICATION_READ_PATH)
+                .header("Origin", SITE_ORIGIN).header("Authorization", "Bearer synthetic-token")
+                .header("X-Request-Id", requestId).header("X-Forwarded-For", "198.51.100.10")
+                .header("traceparent", "00-" + traceId + "-" + parentSpanId + "-01")
+                .method("PATCH", HttpRequest.BodyPublishers.noBody()));
+
+        assertThat(response.statusCode()).isEqualTo(202);
+        assertThat(response.headers().firstValue("X-Upstream")).contains("notification");
+        assertThat(response.headers().allValues("Access-Control-Allow-Origin")).containsExactly(SITE_ORIGIN);
+        assertThat(id(response)).isEqualTo(requestId);
+        Captured captured = REQUESTS.poll(2, TimeUnit.SECONDS);
+        assertThat(captured).extracting(Captured::method, Captured::uri, Captured::authorization,
+                        Captured::ids, Captured::forwardedFor, Captured::body)
+                .containsExactly("PATCH", NOTIFICATION_READ_PATH, "Bearer synthetic-token", List.of(requestId),
+                        List.of("127.0.0.1"), "");
+        assertThat(captured.traceParents()).singleElement().asString()
+                .matches("00-" + traceId + "-(?!" + parentSpanId + ")[0-9a-f]{16}-0[13]");
     }
 
     @Test void generatesAndPropagatesMissingId() throws Exception {
@@ -302,9 +358,21 @@ class GatewayIntegrationTest {
         assertThat(REQUESTS).isEmpty();
     }
 
-    @Test void responseTimeoutReturns504WithRequestId() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/notification-other/notifications", "/internal/v1/notification",
+            "/api/v1/notification/../private", "/api/v1/notification/%2e%2e/private",
+            "/api/v1/notification/%2fprivate", "/api/v1/notification/%5cprivate",
+            "/api/v1/notification/notifications/%2e%2e%3b/private"})
+    void rejectsPathsOutsideTheNotificationPrefixAndAmbiguousPaths(String path) throws Exception {
+        assertThat(send(request(path)).statusCode()).isEqualTo(404);
+        assertThat(REQUESTS).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/auth/slow", "/api/v1/notification/slow"})
+    void responseTimeoutReturns504WithRequestId(String path) throws Exception {
         long start = System.nanoTime();
-        HttpResponse<String> response = send(request("/api/v1/auth/slow")
+        HttpResponse<String> response = send(request(path)
                 .header("X-Request-Id", "timeout-test").header("Origin", SITE_ORIGIN));
         assertThat(response.statusCode()).isEqualTo(504);
         assertThat(response.headers().allValues("Access-Control-Allow-Origin")).containsExactly(SITE_ORIGIN);
@@ -319,6 +387,7 @@ class GatewayIntegrationTest {
         assertThat(response.body()).contains("\"status\":\"UP\"")
                 .doesNotContain("\"details\"", "\"components\"");
         assertUuid(id(response));
+        assertThat(REQUESTS).isEmpty();
     }
 
     @Test void infoIsExposedWithoutEnvironmentData() throws Exception {
