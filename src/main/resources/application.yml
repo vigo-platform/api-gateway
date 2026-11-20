@@ -29,6 +29,8 @@ gateway:
     storage-origin: ${STORAGE_SCHEME}://${STORAGE_HOST}:${STORAGE_PORT}
     storage-prefix: ${STORAGE_ROUTE_PREFIX}
     storage-response-timeout-ms: ${STORAGE_RESPONSE_TIMEOUT_MS:120000}
+    notification-origin: ${NOTIFICATION_SCHEME}://${NOTIFICATION_HOST}:${NOTIFICATION_PORT}
+    notification-prefix: ${NOTIFICATION_ROUTE_PREFIX}
 management:
   tracing:
     sampling:

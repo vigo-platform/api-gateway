@@ -10,7 +10,7 @@ scheme, host, and port in `.env`.
 | Auth JWKS | Exact `/.well-known/jwks.json` for GET and HEAD | `http://auth:8080` |
 | User | `/api/v1/users`, `/api/v1/coaches`, `/api/v1/admin/coaches` | `http://user:8081` |
 | Storage | `/api/v1/files` | `http://storage:8083` |
-| Notification | None | Reserved settings |
+| Notification | `/api/v1/notification` | `http://notification:8085` |
 | API Gateway | `/actuator/health`, `/actuator/info` | Served locally |
 
 For deployments where the reverse proxy forwards only `/api/v1/` to Gateway,
@@ -18,3 +18,10 @@ add an exact match for `/.well-known/jwks.json` at the proxy as well. Services
 that validate JWTs use their configured JWKS origin. The old synthetic route,
 internal service paths and Storage media paths are outside the routing table.
 Requests with dot segments or encoded separators in routed paths return `404`.
+
+Notification serves `GET /api/v1/notification/notifications`,
+`GET /api/v1/notification/notifications/unread-count`, and
+`PATCH /api/v1/notification/notifications/{id}/read` when the upstream enables
+`NOTIFICATION_IN_APP_ENABLED`. Gateway forwards the original path and bearer
+token. Notification verifies the JWT and authorizes access to the user's
+notifications. Notification's `/actuator/**` endpoints sit outside its Gateway prefix.

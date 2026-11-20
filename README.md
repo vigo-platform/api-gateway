@@ -13,13 +13,17 @@ Use plain `NAME=value` lines. The local file is ignored by Git and Docker builds
 ```bash
 cp -n .env.example .env
 SERVER_PORT=8088 AUTH_HOST=127.0.0.1 USER_HOST=127.0.0.1 STORAGE_HOST=127.0.0.1 \
+  NOTIFICATION_HOST=127.0.0.1 \
   sh ./mvnw spring-boot:run
 ```
 
 The example runs Gateway on `8088` so it can share the host with Auth on `8080`.
 Set `SERVER_PORT` and the upstream addresses to the values for your environment.
-In Docker, the example uses DNS names `auth`, `user`, and `storage` on the shared
-network. Notification has reserved address settings and no public HTTP route.
+In Docker, the example uses DNS names `auth`, `user`, `storage`, and `notification`
+on the shared network. Set `NOTIFICATION_SCHEME`, `NOTIFICATION_HOST`,
+`NOTIFICATION_PORT`, and `NOTIFICATION_ROUTE_PREFIX` when configuring Gateway.
+The development example uses `http://notification:8085` and `/api/v1/notification`.
+Notification must listen on the configured port and run with its IN_APP REST API enabled.
 
 Gateway forwards the full path, query, method, body, and `Authorization` header.
 The upstream services validate credentials and apply their own access policies.
